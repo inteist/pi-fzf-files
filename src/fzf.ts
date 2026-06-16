@@ -6,10 +6,12 @@ export interface FzfTerm {
   kind: FzfTermKind;
   inverse: boolean;
   lowerText: string;
+  caseSensitive?: boolean;
 }
 
 export interface FzfQuery {
   raw: string;
+  /** AND clauses; terms inside a clause are OR alternatives. */
   groups: FzfTerm[][];
 }
 
@@ -22,36 +24,67 @@ const NO_MATCH: FzfMatch = { matched: false, score: Number.NEGATIVE_INFINITY };
 const MATCH_ZERO: FzfMatch = { matched: true, score: 0 };
 
 export function parseFzfQuery(input: string): FzfQuery {
-  const groups: FzfTerm[][] = [[]];
+  const tokens = tokenizeFzfQuery(input);
+  const groups: FzfTerm[][] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+
+    // In fzf, a standalone bar between terms joins the previous and next
+    // terms with OR. A leading bar is a literal term, and a trailing bar is
+    // ignored while the user is still typing the next alternative.
+    if (token === "|" && groups.length > 0) {
+      if (index === tokens.length - 1) {
+        continue;
+      }
+
+      let nextIndex = index + 1;
+      let term: FzfTerm | null = null;
+      while (nextIndex < tokens.length && term === null) {
+        term = parseFzfTerm(tokens[nextIndex]!);
+        nextIndex += 1;
+      }
+      if (term) {
+        groups[groups.length - 1]!.push(term);
+      }
+      index = nextIndex - 1;
+      continue;
+    }
+
+    const term = parseFzfTerm(token);
+    if (term) {
+      groups.push([term]);
+    }
+  }
+
+  return { raw: input, groups };
+}
+
+function tokenizeFzfQuery(input: string): string[] {
+  const tokens: string[] = [];
   let token = "";
   let escaped = false;
 
   const pushToken = () => {
-    if (token.length === 0) return;
-    const term = parseFzfTerm(token);
-    if (term) {
-      groups[groups.length - 1]!.push(term);
+    if (token.length > 0) {
+      tokens.push(token);
+      token = "";
     }
-    token = "";
   };
 
   for (const char of input) {
     if (escaped) {
-      token += char;
+      if (/\s/u.test(char)) {
+        token += char;
+      } else {
+        token += `\\${char}`;
+      }
       escaped = false;
       continue;
     }
 
     if (char === "\\") {
       escaped = true;
-      continue;
-    }
-
-    if (char === "|") {
-      pushToken();
-      if (groups[groups.length - 1]!.length > 0) {
-        groups.push([]);
-      }
       continue;
     }
 
@@ -68,10 +101,7 @@ export function parseFzfQuery(input: string): FzfQuery {
   }
   pushToken();
 
-  return {
-    raw: input,
-    groups: groups.filter((group) => group.length > 0),
-  };
+  return tokens;
 }
 
 export function parseFzfTerm(rawToken: string): FzfTerm | null {
@@ -90,21 +120,29 @@ export function parseFzfTerm(rawToken: string): FzfTerm | null {
   let kind: FzfTermKind;
   let text = raw;
 
-  if (raw.startsWith("'") && raw.length > 1) {
+  if (raw.startsWith("'")) {
     text = raw.slice(1);
+    if (text.length === 0) {
+      return null;
+    }
+
     if (text.endsWith("'") && text.length > 1) {
       text = text.slice(0, -1);
       kind = "boundary";
     } else {
       kind = "exact";
     }
-  } else if (raw.startsWith("^") && raw.length > 1) {
+  } else if (raw.startsWith("^")) {
     text = raw.slice(1);
-    if (text.endsWith("$") && text.length > 1) {
+    if (text.endsWith("$")) {
       text = text.slice(0, -1);
       kind = "equal";
     } else {
       kind = "prefix";
+    }
+
+    if (text.length === 0) {
+      return null;
     }
   } else if (raw.endsWith("$") && raw.length > 1) {
     text = raw.slice(0, -1);
@@ -126,6 +164,7 @@ export function parseFzfTerm(rawToken: string): FzfTerm | null {
     kind,
     inverse,
     lowerText: text.toLowerCase(),
+    caseSensitive: hasUpperCase(text),
   };
 }
 
@@ -135,57 +174,59 @@ export function matchFzfQuery(query: FzfQuery, target: string): FzfMatch {
   }
 
   const lowerTarget = target.toLowerCase();
-  let best = NO_MATCH;
+  let score = 0;
 
   for (const group of query.groups) {
     const groupMatch = matchFzfGroup(group, target, lowerTarget);
-    if (groupMatch.matched && groupMatch.score > best.score) {
-      best = groupMatch;
+    if (!groupMatch.matched) {
+      return NO_MATCH;
+    }
+    score += groupMatch.score;
+  }
+
+  return { matched: true, score };
+}
+
+function matchFzfGroup(group: FzfTerm[], target: string, lowerTarget: string): FzfMatch {
+  let best = NO_MATCH;
+
+  for (const term of group) {
+    const termMatch = matchFzfTerm(term, target, lowerTarget);
+    const alternativeMatch = term.inverse
+      ? termMatch.matched
+        ? NO_MATCH
+        : MATCH_ZERO
+      : termMatch;
+
+    if (alternativeMatch.matched && alternativeMatch.score > best.score) {
+      best = alternativeMatch;
     }
   }
 
   return best;
 }
 
-function matchFzfGroup(group: FzfTerm[], target: string, lowerTarget: string): FzfMatch {
-  let score = 0;
-
-  for (const term of group) {
-    const termMatch = matchFzfTerm(term, target, lowerTarget);
-    if (term.inverse) {
-      if (termMatch.matched) {
-        return NO_MATCH;
-      }
-      continue;
-    }
-
-    if (!termMatch.matched) {
-      return NO_MATCH;
-    }
-    score += termMatch.score;
-  }
-
-  return { matched: true, score };
-}
-
 export function matchFzfTerm(term: FzfTerm, target: string, lowerTarget = target.toLowerCase()): FzfMatch {
+  const searchTarget = term.caseSensitive ? target : lowerTarget;
+  const searchText = term.caseSensitive ? term.text : term.lowerText;
+
   switch (term.kind) {
     case "fuzzy":
-      return fuzzyMatchScore(lowerTarget, term.lowerText, target);
+      return fuzzyMatchScore(searchTarget, searchText, target);
     case "exact":
-      return exactMatchScore(lowerTarget, term.lowerText, target);
+      return exactMatchScore(searchTarget, searchText, target);
     case "boundary":
-      return boundaryMatchScore(lowerTarget, term.lowerText, target);
+      return boundaryMatchScore(searchTarget, searchText, target);
     case "prefix":
-      return lowerTarget.startsWith(term.lowerText)
+      return searchTarget.startsWith(searchText)
         ? { matched: true, score: 900 + term.text.length * 8 }
         : NO_MATCH;
     case "suffix":
-      return lowerTarget.endsWith(term.lowerText)
+      return searchTarget.endsWith(searchText)
         ? { matched: true, score: 850 + term.text.length * 8 }
         : NO_MATCH;
     case "equal":
-      return lowerTarget === term.lowerText
+      return searchTarget === searchText
         ? { matched: true, score: 1_100 + term.text.length * 10 }
         : NO_MATCH;
   }
@@ -318,6 +359,10 @@ function isBoundaryEnd(value: string, index: number): boolean {
 
   // Treat fooBar as a boundary after "foo" when callers pass original casing.
   return isLower(previous) && isUpper(current);
+}
+
+function hasUpperCase(value: string): boolean {
+  return value !== value.toLowerCase();
 }
 
 function isAlphaNumeric(char: string): boolean {

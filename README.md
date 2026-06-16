@@ -17,13 +17,18 @@ Pure TypeScript replacement for Pi's default `@` file-reference autocomplete. It
 | `'wild'` | exact substring at word boundaries |
 | `^music` | prefix exact |
 | `.mp3$` | suffix exact |
+| `^music$` | exact whole path |
 | `!fire` | inverse exact substring |
 | `!^music` | inverse prefix exact |
 | `!.mp3$` | inverse suffix exact |
 | `foo bar` | AND |
-| <code>foo &#124; bar</code> | OR |
+| `'match1 'match2` | AND of multiple exact substrings |
+| <code>foo &#124; bar</code> | OR between adjacent terms |
+| <code>^core go$ &#124; rb$ &#124; py$</code> | `^core` AND (`go$` OR `rb$` OR `py$`) |
+| <code>foo&#124;bar</code> | literal pipe inside a token |
+| `Foo` | smart-case match (uppercase makes that term case-sensitive) |
 
-Spaces and `|` can be escaped inside a token with `\`.
+Spaces can be escaped inside a token with `\`.
 
 ## Frecency
 

@@ -18,6 +18,12 @@ describe("fzf extended syntax", () => {
     expect(matches("'wild", "src/the-wlid-file.ts")).toBe(false);
   });
 
+  test("multiple exact terms are ANDed", () => {
+    expect(matches("'match1 'match2", "src/match1-and-match2.ts")).toBe(true);
+    expect(matches("'match1 'match2", "src/match2-and-match1.ts")).toBe(true);
+    expect(matches("'match1 'match2", "src/match1-only.ts")).toBe(false);
+  });
+
   test("exact boundary with quotes at both ends", () => {
     expect(matches("'wild'", "src/the-wild-file.ts")).toBe(true);
     expect(matches("'wild'", "src/wildfire.ts")).toBe(false);
@@ -52,9 +58,43 @@ describe("fzf extended syntax", () => {
     expect(matches("readme | package", "src/index.ts")).toBe(false);
   });
 
-  test("escaped spaces and pipes stay inside a token", () => {
+  test("OR binds adjacent terms while other terms stay ANDed", () => {
+    expect(matches("^core go$ | rb$ | py$", "core.rb")).toBe(true);
+    expect(matches("^core go$ | rb$ | py$", "core.py")).toBe(true);
+    expect(matches("^core go$ | rb$ | py$", "other.rb")).toBe(false);
+    expect(matches("foo | bar baz", "foo baz")).toBe(true);
+    expect(matches("foo | bar baz", "bar baz")).toBe(true);
+    expect(matches("foo | bar baz", "foo qux")).toBe(false);
+    expect(matches("foo | ' bar", "bar")).toBe(true);
+  });
+
+  test("pipes are literal unless standalone between terms", () => {
+    expect(matches("foo|bar", "docs/foo|bar.md")).toBe(true);
+    expect(matches("foo|bar", "docs/foo-bar.md")).toBe(false);
+    expect(matches("| foo", "docs/foo|bar.md")).toBe(true);
+    expect(matches("foo |", "docs/foo.md")).toBe(true);
+  });
+
+  test("escaped spaces stay inside a token", () => {
     expect(matches("'my\\ file", "docs/my file.md")).toBe(true);
-    expect(matches("'foo\\|bar", "docs/foo|bar.md")).toBe(true);
+    expect(matches("'my\\ file", "docs/my-file.md")).toBe(false);
+  });
+
+  test("smart-case matching follows fzf defaults", () => {
+    expect(matches("foo", "src/Foo.ts")).toBe(true);
+    expect(matches("Foo", "src/foo.ts")).toBe(false);
+    expect(matches("'Foo", "src/Foo.ts")).toBe(true);
+    expect(matches("!Foo", "src/foo.ts")).toBe(true);
+    expect(matches("!Foo", "src/Foo.ts")).toBe(false);
+  });
+
+  test("empty exact and anchor terms are ignored", () => {
+    expect(matches("'", "src/anything.ts")).toBe(true);
+    expect(matches("^", "src/anything.ts")).toBe(true);
+    expect(matches("^$", "src/anything.ts")).toBe(true);
+    expect(matches("!^", "src/anything.ts")).toBe(true);
+    expect(matches("$", "src/$file.ts")).toBe(true);
+    expect(matches("$", "src/plain.ts")).toBe(false);
   });
 
   test("fuzzy scoring rewards path separator boundaries beyond the basename", () => {
