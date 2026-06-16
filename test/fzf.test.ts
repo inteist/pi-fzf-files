@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { matchFzfQuery, parseFzfQuery } from "../src/fzf.js";
+import { fuzzyMatchScore, matchFzfQuery, parseFzfQuery } from "../src/fzf.js";
 import { extractAtFzfPrefix, extractAtReferences } from "../src/prefix.js";
 
 function matches(query: string, target: string): boolean {
@@ -21,6 +21,12 @@ describe("fzf extended syntax", () => {
   test("exact boundary with quotes at both ends", () => {
     expect(matches("'wild'", "src/the-wild-file.ts")).toBe(true);
     expect(matches("'wild'", "src/wildfire.ts")).toBe(false);
+  });
+
+  test("boundary matching respects camelCase transitions", () => {
+    expect(matches("'bar'", "src/fooBar.ts")).toBe(true);
+    expect(matches("'foo'", "src/fooBar.ts")).toBe(true);
+    expect(matches("'bar'", "src/foobar.ts")).toBe(false);
   });
 
   test("prefix, suffix, and exact whole path", () => {
@@ -49,6 +55,15 @@ describe("fzf extended syntax", () => {
   test("escaped spaces and pipes stay inside a token", () => {
     expect(matches("'my\\ file", "docs/my file.md")).toBe(true);
     expect(matches("'foo\\|bar", "docs/foo|bar.md")).toBe(true);
+  });
+
+  test("fuzzy scoring rewards path separator boundaries beyond the basename", () => {
+    const afterSlash = fuzzyMatchScore("src/foo/bar.ts", "sf");
+    const afterDash = fuzzyMatchScore("src-foo/bar.ts", "sf");
+
+    expect(afterSlash.matched).toBe(true);
+    expect(afterDash.matched).toBe(true);
+    expect(afterSlash.score).toBeGreaterThan(afterDash.score);
   });
 });
 

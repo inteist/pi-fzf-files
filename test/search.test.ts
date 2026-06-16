@@ -13,7 +13,7 @@ class MemoryFrecency {
     this.scores.set(path, score);
   }
 
-  score(path: string): number {
+  score(path: string, _now?: number): number {
     return this.scores.get(path) ?? 0;
   }
 }

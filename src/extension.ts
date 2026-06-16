@@ -26,8 +26,12 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
     const promise = active.index.rebuild();
     active.rebuildPromise = promise;
 
+    const isCurrentRebuild = () => runtime === active && active.rebuildPromise === promise;
+
     try {
       await promise;
+      if (!isCurrentRebuild()) return;
+
       const stats = active.index.getStats();
       const truncated = stats.truncated ? ", truncated" : "";
       ctx.ui.setStatus(STATUS_KEY, `fzf: ${stats.entries} files${truncated}`);
@@ -35,6 +39,8 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(formatStats(stats), stats.truncated ? "warning" : "info");
       }
     } catch (error) {
+      if (!isCurrentRebuild()) return;
+
       ctx.ui.setStatus(STATUS_KEY, "fzf: index failed");
       ctx.ui.notify(`fzf-files: failed to index files: ${formatError(error)}`, "error");
     } finally {
@@ -45,8 +51,10 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    runtime?.index.abort();
-    await runtime?.frecency.flush();
+    const previous = runtime;
+    runtime = undefined;
+    previous?.index.abort();
+    await previous?.frecency.flush();
 
     const frecency = new FrecencyStore(ctx.cwd);
     await frecency.load();
@@ -82,9 +90,10 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
-    runtime?.index.abort();
-    await runtime?.frecency.flush();
+    const active = runtime;
     runtime = undefined;
+    active?.index.abort();
+    await active?.frecency.flush();
   });
 
   pi.registerCommand("fzf-files", {
@@ -98,10 +107,6 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
 
       const command = args.trim().toLowerCase() || "stats";
       if (command === "stats") {
-        if (active.rebuildPromise) {
-          ctx.ui.notify(`${formatStats(active.index.getStats())}\nFrecency entries: ${active.frecency.size}\nStore: ${active.frecency.path}`, "info");
-          return;
-        }
         ctx.ui.notify(`${formatStats(active.index.getStats())}\nFrecency entries: ${active.frecency.size}\nStore: ${active.frecency.path}`, "info");
         return;
       }

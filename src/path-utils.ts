@@ -26,7 +26,7 @@ export function quoteAtPath(path: string): string {
     return `@${normalized}`;
   }
 
-  const escaped = normalized.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escaped = normalized.replace(/"/g, '\\"');
   return `@"${escaped}"`;
 }
 

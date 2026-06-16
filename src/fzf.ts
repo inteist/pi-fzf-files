@@ -171,11 +171,11 @@ function matchFzfGroup(group: FzfTerm[], target: string, lowerTarget: string): F
 export function matchFzfTerm(term: FzfTerm, target: string, lowerTarget = target.toLowerCase()): FzfMatch {
   switch (term.kind) {
     case "fuzzy":
-      return fuzzyMatchScore(lowerTarget, term.lowerText);
+      return fuzzyMatchScore(lowerTarget, term.lowerText, target);
     case "exact":
-      return exactMatchScore(lowerTarget, term.lowerText);
+      return exactMatchScore(lowerTarget, term.lowerText, target);
     case "boundary":
-      return boundaryMatchScore(lowerTarget, term.lowerText);
+      return boundaryMatchScore(lowerTarget, term.lowerText, target);
     case "prefix":
       return lowerTarget.startsWith(term.lowerText)
         ? { matched: true, score: 900 + term.text.length * 8 }
@@ -191,13 +191,13 @@ export function matchFzfTerm(term: FzfTerm, target: string, lowerTarget = target
   }
 }
 
-function exactMatchScore(lowerTarget: string, lowerNeedle: string): FzfMatch {
+function exactMatchScore(lowerTarget: string, lowerNeedle: string, target = lowerTarget): FzfMatch {
   const index = lowerTarget.indexOf(lowerNeedle);
   if (index < 0) {
     return NO_MATCH;
   }
 
-  const boundaryBonus = isBoundaryStart(lowerTarget, index) ? 35 : 0;
+  const boundaryBonus = isBoundaryStart(target, index) ? 35 : 0;
   const basenameBonus = index > lowerTarget.lastIndexOf("/") ? 25 : 0;
   return {
     matched: true,
@@ -205,11 +205,11 @@ function exactMatchScore(lowerTarget: string, lowerNeedle: string): FzfMatch {
   };
 }
 
-function boundaryMatchScore(lowerTarget: string, lowerNeedle: string): FzfMatch {
+function boundaryMatchScore(lowerTarget: string, lowerNeedle: string, target = lowerTarget): FzfMatch {
   let index = lowerTarget.indexOf(lowerNeedle);
   while (index >= 0) {
     const end = index + lowerNeedle.length;
-    if (isBoundaryStart(lowerTarget, index) && isBoundaryEnd(lowerTarget, end)) {
+    if (isBoundaryStart(target, index) && isBoundaryEnd(target, end)) {
       return {
         matched: true,
         score: 800 + lowerNeedle.length * 9 - Math.min(index, 80),
@@ -220,7 +220,7 @@ function boundaryMatchScore(lowerTarget: string, lowerNeedle: string): FzfMatch 
   return NO_MATCH;
 }
 
-export function fuzzyMatchScore(lowerTarget: string, lowerQuery: string): FzfMatch {
+export function fuzzyMatchScore(lowerTarget: string, lowerQuery: string, target = lowerTarget): FzfMatch {
   if (lowerQuery.length === 0) {
     return MATCH_ZERO;
   }
@@ -242,10 +242,10 @@ export function fuzzyMatchScore(lowerTarget: string, lowerQuery: string): FzfMat
     if (i > 0 && position === positions[i - 1]! + 1) {
       consecutive += 1;
     }
-    if (isBoundaryStart(lowerTarget, position)) {
+    if (isBoundaryStart(target, position)) {
       boundary += 1;
     }
-    if (position === lowerTarget.lastIndexOf("/") + 1) {
+    if (position > 0 && lowerTarget[position - 1] === "/") {
       separator += 1;
     }
   }
@@ -291,7 +291,7 @@ function findTightSubsequence(target: string, query: string): number[] | null {
     const queryChar = query[queryIndex]!;
     const found = target.lastIndexOf(queryChar, targetIndex);
     if (found < 0) {
-      return forward;
+      return null;
     }
     backward[queryIndex] = found;
     targetIndex = found - 1;

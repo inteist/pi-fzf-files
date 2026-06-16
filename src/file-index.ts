@@ -1,9 +1,14 @@
 import { opendir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { matchFzfQuery, parseFzfQuery } from "./fzf.js";
 import type { FrecencyStore } from "./frecency.js";
-import { basenameDisplay, depthOfDisplayPath, joinDisplayPath, quoteAtPath } from "./path-utils.js";
+import { matchFzfQuery, parseFzfQuery } from "./fzf.js";
+import {
+  basenameDisplay,
+  depthOfDisplayPath,
+  joinDisplayPath,
+  quoteAtPath,
+} from "./path-utils.js";
 import { TopK } from "./top-k.js";
 
 export interface IndexedPath {
@@ -144,12 +149,18 @@ export class FileIndex {
     }
   }
 
-  search(queryText: string, options: { limit: number; signal: AbortSignal }): FileSearchResult[] {
+  search(
+    queryText: string,
+    options: { limit: number; signal: AbortSignal },
+  ): FileSearchResult[] {
     if (options.signal.aborted) return [];
 
     const query = parseFzfQuery(queryText.trim());
     const now = Date.now();
-    const top = new TopK<RankedEntry>(options.limit, (left, right) => compareRanked(left, right) > 0);
+    const top = new TopK<RankedEntry>(
+      options.limit,
+      (left, right) => compareRanked(left, right) > 0,
+    );
     const snapshot = this.entries;
 
     for (let index = 0; index < snapshot.length; index += 1) {
@@ -182,7 +193,12 @@ export class FileIndex {
     });
   }
 
-  private async walkDirectory(absDir: string, relDir: string, depth: number, signal: AbortSignal): Promise<void> {
+  private async walkDirectory(
+    absDir: string,
+    relDir: string,
+    depth: number,
+    signal: AbortSignal,
+  ): Promise<void> {
     if (signal.aborted || this.truncated) return;
     if (depth > (this.options.maxDepth ?? DEFAULT_MAX_DEPTH)) return;
 
@@ -204,13 +220,20 @@ export class FileIndex {
 
       const relPath = joinDisplayPath(relDir, name);
       this.addEntry(relPath, isDirectory);
-      if (this.entries.length >= (this.options.maxEntries ?? DEFAULT_MAX_ENTRIES)) {
+      if (
+        this.entries.length >= (this.options.maxEntries ?? DEFAULT_MAX_ENTRIES)
+      ) {
         this.truncated = true;
         return;
       }
 
       if (isDirectory) {
-        await this.walkDirectory(join(absDir, name), relPath, depth + 1, signal);
+        await this.walkDirectory(
+          join(absDir, name),
+          relPath,
+          depth + 1,
+          signal,
+        );
       }
     }
   }
@@ -238,8 +261,11 @@ export class FileIndex {
 function compareRanked(left: RankedEntry, right: RankedEntry): number {
   if (left.score !== right.score) return left.score - right.score;
   if (left.frecency !== right.frecency) return left.frecency - right.frecency;
-  if (left.entry.isDirectory !== right.entry.isDirectory) return left.entry.isDirectory ? 1 : -1;
-  if (left.entry.depth !== right.entry.depth) return right.entry.depth - left.entry.depth;
-  if (left.entry.path.length !== right.entry.path.length) return right.entry.path.length - left.entry.path.length;
+  if (left.entry.isDirectory !== right.entry.isDirectory)
+    return left.entry.isDirectory ? 1 : -1;
+  if (left.entry.depth !== right.entry.depth)
+    return right.entry.depth - left.entry.depth;
+  if (left.entry.path.length !== right.entry.path.length)
+    return right.entry.path.length - left.entry.path.length;
   return -left.entry.path.localeCompare(right.entry.path);
 }
