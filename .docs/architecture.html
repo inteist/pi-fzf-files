@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pi-fzf-files Architecture</title>
+  <link rel="stylesheet" href="./assets/architecture.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <p class="eyebrow">Architecture document</p>
+      <h1>pi-fzf-files: dependency-free fzf-style file autocomplete for Pi</h1>
+      <p class="summary">
+        This extension replaces Pi's default <code>@</code> file-reference autocomplete with a TypeScript implementation that builds a local in-memory path index, searches it with fzf-style query syntax, and uses persistent frecency data as a stable ranking tie-breaker.
+      </p>
+      <div class="meta-row">
+        <span class="pill">Entry point: <code>index.ts</code></span>
+        <span class="pill">Runtime: Pi extension API</span>
+        <span class="pill">Storage: in-memory index + JSON frecency</span>
+        <span class="pill">No runtime dependencies beyond Node/Pi</span>
+      </div>
+      <nav class="quick-links" aria-label="Sections">
+        <a class="pill" href="#runtime">Runtime lifecycle</a>
+        <a class="pill" href="#index">Local index</a>
+        <a class="pill" href="#search">Search and ranking</a>
+        <a class="pill" href="#frecency">Frecency</a>
+        <a class="pill" href="#autocomplete">Autocomplete integration</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="section" id="overview">
+        <div class="section-head">
+          <h2>System overview</h2>
+          <p>The extension is intentionally small: it keeps all searchable file metadata in memory for low-latency keystroke searches, persists only user reference history, and delegates final text insertion to Pi's built-in autocomplete provider.</p>
+        </div>
+
+        <div class="flow">
+          <div class="flow-row">
+            <div class="flow-box">
+              <strong>Session start</strong>
+              <span>Load project frecency JSON, construct <code>FileIndex</code>, wrap the active autocomplete provider, then begin indexing.</span>
+            </div>
+            <div class="arrow">→</div>
+            <div class="flow-box">
+              <strong>User types <code>@...</code></strong>
+              <span>The provider extracts the active fzf query and asks <code>FileIndex.search()</code> for the top matches.</span>
+            </div>
+            <div class="arrow">→</div>
+            <div class="flow-box">
+              <strong>User submits prompt</strong>
+              <span>The input hook scans submitted text for real <code>@path</code> references and records matching paths in frecency.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid three">
+          <article class="card">
+            <h3>Fast hot path</h3>
+            <p>Search runs over a cached array of indexed paths and keeps only the best K results in a heap, avoiding a full sort of large repositories.</p>
+          </article>
+          <article class="card">
+            <h3>Portable storage</h3>
+            <p>The file index is not serialized. Only frecency is persisted as project-scoped JSON under Pi's agent directory, written atomically.</p>
+          </article>
+          <article class="card">
+            <h3>fzf-compatible syntax</h3>
+            <p>Queries support fuzzy subsequences, exact matches, boundary matches, prefix/suffix/equal terms, inverse terms, AND groups, and OR groups.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="modules">
+        <div class="section-head">
+          <h2>Main modules</h2>
+          <p>Each source file owns one piece of the extension pipeline. The modules communicate through plain TypeScript interfaces and simple data structures.</p>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Module</th><th>Responsibility</th><th>Important implementation details</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>index.ts</code></td>
+                <td>Package export.</td>
+                <td>Re-exports the default extension factory from <code>src/extension.ts</code> for Pi package discovery.</td>
+              </tr>
+              <tr>
+                <td><code>src/extension.ts</code></td>
+                <td>Pi integration and session runtime.</td>
+                <td>Registers lifecycle hooks, wraps autocomplete, tracks prompt input, exposes <code>/fzf-files</code> commands, and coordinates indexing/frecency shutdown.</td>
+              </tr>
+              <tr>
+                <td><code>src/file-index.ts</code></td>
+                <td>In-memory project path index and search.</td>
+                <td>Walks the repository with <code>opendir()</code>, filters heavy directories, stores <code>IndexedPath[]</code> plus a path set, and ranks matches with <code>TopK</code>.</td>
+              </tr>
+              <tr>
+                <td><code>src/fzf.ts</code></td>
+                <td>fzf query parser and matcher.</td>
+                <td>Parses extended tokens into OR groups of AND terms; scores fuzzy/exact/boundary/prefix/suffix/equal matches.</td>
+              </tr>
+              <tr>
+                <td><code>src/frecency.ts</code></td>
+                <td>Persistent reference history.</td>
+                <td>Stores count and timestamps in project-scoped JSON; debounces writes; scores by log frequency times exponential recency decay.</td>
+              </tr>
+              <tr>
+                <td><code>src/provider.ts</code></td>
+                <td>Autocomplete provider wrapper.</td>
+                <td>Intercepts active <code>@</code> tokens, returns fzf file suggestions, and delegates non-<code>@</code> behavior and completion application to Pi's current provider.</td>
+              </tr>
+              <tr>
+                <td><code>src/prefix.ts</code></td>
+                <td><code>@</code> token parsing.</td>
+                <td>Finds the current autocomplete prefix and extracts submitted references, with support for quoted paths and escaping.</td>
+              </tr>
+              <tr>
+                <td><code>src/path-utils.ts</code></td>
+                <td>Path normalization and quoting.</td>
+                <td>Converts to display paths, normalizes submitted references to project-relative paths, and emits <code>@path</code> or <code>@&quot;path with spaces&quot;</code>.</td>
+              </tr>
+              <tr>
+                <td><code>src/top-k.ts</code></td>
+                <td>Bounded result selection.</td>
+                <td>Maintains a min-heap of the current worst-to-best candidates and sorts only the retained K results for display.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section" id="runtime">
+        <div class="section-head">
+          <h2>Runtime lifecycle</h2>
+          <p>The extension runtime is scoped to the active Pi session and current working directory. Session replacement and shutdown abort indexing and flush frecency before releasing state.</p>
+        </div>
+
+        <div class="kv" role="table" aria-label="Runtime fields">
+          <div class="key">Runtime shape</div><div class="value"><code>{ cwd, frecency, index, rebuildPromise }</code></div>
+          <div class="key">Status key</div><div class="value"><code>fzf-files</code> status updates show indexing progress, entry counts, truncation, and failures.</div>
+          <div class="key">Startup</div><div class="value"><code>session_start</code> clears any old runtime, flushes old frecency, loads the new store, creates the new index, registers the provider, and starts a rebuild.</div>
+          <div class="key">Shutdown</div><div class="value"><code>session_shutdown</code> clears runtime first, aborts the index walk, and awaits frecency flush.</div>
+          <div class="key">Commands</div><div class="value"><code>/fzf-files stats</code>, <code>reindex</code>, and <code>clear-frecency</code>/<code>reset-frecency</code>.</div>
+        </div>
+
+        <pre><code>type Runtime = {
+  cwd: string;
+  frecency: FrecencyStore;
+  index: FileIndex;
+  rebuildPromise: Promise&lt;void&gt; | undefined;
+};</code></pre>
+
+        <div class="callout good">
+          <strong>Stale rebuild protection:</strong> rebuild completion checks that the same runtime and promise are still current before updating UI. This prevents aborted indexing from an old session from overwriting the new session's status.
+        </div>
+      </section>
+
+      <section class="section" id="index">
+        <div class="section-head">
+          <h2>Local file index</h2>
+          <p>The local index is deliberately in-memory. It is rebuilt on session startup or manual reindex, making searches fast without maintaining a persistent database or watcher.</p>
+        </div>
+
+        <article class="card">
+          <h3>Indexed data model</h3>
+          <p>Every file or directory is represented as an <code>IndexedPath</code>. Directories are stored without a trailing slash in <code>path</code>, but with a slash in <code>matchPath</code> so queries can match directory continuations.</p>
+          <pre><code>interface IndexedPath {
+  path: string;           // project-relative display path, e.g. "src/fzf.ts"
+  matchPath: string;      // same path, with trailing slash for directories
+  lowerMatchPath: string; // lower-cased cached form reserved for matching use
+  name: string;           // basename used as suggestion label
+  isDirectory: boolean;
+  depth: number;          // slash count for tie-breaking
+}</code></pre>
+        </article>
+
+        <div class="grid two">
+          <article class="card">
+            <h3>Index storage</h3>
+            <ul>
+              <li><code>entries: IndexedPath[]</code> is the searchable ordered snapshot.</li>
+              <li><code>paths: Set&lt;string&gt;</code> supports O(1) validation when submitted references are recorded.</li>
+              <li>Stats are derived from the entries array: files, directories, truncation, indexing state, timestamp, and duration.</li>
+              <li>No index file is written to disk. A new Pi session rebuilds from the current filesystem state.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Walking behavior</h3>
+            <ul>
+              <li>Uses Node's async <code>opendir()</code> iterator rather than spawning <code>fd</code>.</li>
+              <li>Default cap: <code>120,000</code> entries.</li>
+              <li>Default max depth: <code>30</code>.</li>
+              <li>Ignores non-file, non-directory entries and skips heavyweight directories such as <code>.git</code>, <code>node_modules</code>, <code>dist</code>, <code>build</code>, <code>.next</code>, <code>coverage</code>, <code>target</code>, and virtualenv/cache directories.</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="callout warn">
+          <strong>Trade-off:</strong> because the index is not watched, filesystem changes made after startup are not visible until <code>/fzf-files reindex</code> or a new session. This keeps implementation and runtime cost low.
+        </div>
+      </section>
+
+      <section class="section" id="search">
+        <div class="section-head">
+          <h2>Search, matching, and ranking</h2>
+          <p>Search composes fzf-style textual match quality with frecency as a tie-breaker. The textual score dominates so history only changes ordering between otherwise comparable matches.</p>
+        </div>
+
+        <div class="flow">
+          <div class="flow-row">
+            <div class="flow-box">
+              <strong>Parse query</strong>
+              <span><code>parseFzfQuery()</code> tokenizes spaces, escapes, AND terms, OR groups, and inverse markers.</span>
+            </div>
+            <div class="arrow">→</div>
+            <div class="flow-box">
+              <strong>Scan snapshot</strong>
+              <span><code>FileIndex.search()</code> walks the current entries array and checks cancellation every 1024 candidates.</span>
+            </div>
+            <div class="arrow">→</div>
+            <div class="flow-box">
+              <strong>Keep top K</strong>
+              <span><code>TopK</code> retains only the best suggestions, then returns them best-first for the dropdown.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Syntax</th><th>Kind</th><th>Implementation</th></tr></thead>
+            <tbody>
+              <tr><td><code>sbtrkt</code></td><td>Fuzzy subsequence</td><td>Finds a subsequence, tightens the span with a backward pass, then scores length, consecutive characters, boundaries, slash boundaries, basename, prefix, and span compactness.</td></tr>
+              <tr><td><code>'wild</code></td><td>Exact substring</td><td>Uses case-insensitive <code>indexOf()</code>, with bonuses for boundary start and basename placement.</td></tr>
+              <tr><td><code>'wild'</code></td><td>Boundary exact</td><td>Requires both start and end boundaries. Boundary checks use original target casing so camelCase transitions such as <code>fooBar</code> are meaningful.</td></tr>
+              <tr><td><code>^music</code></td><td>Prefix</td><td>Matches the whole relative path prefix.</td></tr>
+              <tr><td><code>.mp3$</code></td><td>Suffix</td><td>Matches the whole relative path suffix.</td></tr>
+              <tr><td><code>^file$</code></td><td>Equal</td><td>Requires exact path equality.</td></tr>
+              <tr><td><code>!fire</code></td><td>Inverse exact</td><td>Rejects a candidate when the inner term matches. fzf-style inverse defaults to exact matching.</td></tr>
+              <tr><td><code>foo bar</code></td><td>AND</td><td>All non-inverse terms in a group must match; their scores are added.</td></tr>
+              <tr><td><code>foo | bar</code></td><td>OR</td><td>The best matching group wins.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <article class="card">
+          <h3>Final ranking comparator</h3>
+          <p>Within the top-K heap, candidates are ordered by textual score first, then frecency, then deterministic path traits.</p>
+          <pre><code>1. Higher fzf match score
+2. Higher frecency score
+3. Directories before files
+4. Shallower paths before deeper paths
+5. Shorter paths before longer paths
+6. Lexicographic path order</code></pre>
+        </article>
+      </section>
+
+      <section class="section" id="autocomplete">
+        <div class="section-head">
+          <h2>Autocomplete provider integration</h2>
+          <p>The extension wraps Pi's active autocomplete provider instead of replacing the whole editor integration. This keeps slash commands and completion application behavior consistent with Pi.</p>
+        </div>
+
+        <div class="grid two">
+          <article class="card">
+            <h3>When it intercepts</h3>
+            <p><code>extractAtFzfPrefix()</code> scans the current line before the cursor for the last valid <code>@</code> token start. It ignores email-like uses such as <code>a@b.com</code> and avoids <code>@</code> characters inside double-quoted text.</p>
+          </article>
+          <article class="card">
+            <h3>When it delegates</h3>
+            <p>If no active <code>@</code> prefix exists, the wrapper calls <code>current.getSuggestions()</code>. If an <code>@</code> prefix exists but produces no matches, it intentionally returns <code>null</code> so Pi's default file finder does not appear.</p>
+          </article>
+        </div>
+
+        <article class="card">
+          <h3>Suggestion shaping</h3>
+          <ul>
+            <li>Search limit is <code>20</code> suggestions.</li>
+            <li>Completion value is emitted as <code>@path</code> or quoted <code>@&quot;path with spaces&quot;</code>.</li>
+            <li>Directory labels receive a trailing slash and directory completion values keep the slash so the user can keep completing inside the directory.</li>
+            <li>Descriptions include the relative path and, when positive, <code>freq N.NN</code> for the frecency score.</li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="section" id="frecency">
+        <div class="section-head">
+          <h2>Frecency tracking and persistence</h2>
+          <p>Frecency records which indexed files the user actually referenced in submitted prompts. It is persisted per project and applied during future searches.</p>
+        </div>
+
+        <div class="kv" role="table" aria-label="Frecency storage">
+          <div class="key">Default root</div><div class="value"><code>~/.pi/agent/fzf-files/frecency-v1/</code></div>
+          <div class="key">Override</div><div class="value"><code>PI_CODING_AGENT_DIR</code> changes the Pi agent root.</div>
+          <div class="key">File name</div><div class="value"><code>&lt;sha256(cwd).slice(0, 24)&gt;.json</code></div>
+          <div class="key">Schema</div><div class="value"><code>{ version: 1, cwd, entries: Record&lt;path, { count, firstAccessed, lastAccessed }&gt; }</code></div>
+          <div class="key">Max entries</div><div class="value"><code>20,000</code>, pruned by most recent access and then count.</div>
+          <div class="key">Write strategy</div><div class="value">Debounced by <code>750ms</code>, chained through <code>savePromise</code>, written to a temp file, then atomically renamed.</div>
+        </div>
+
+        <article class="card">
+          <h3>Recording flow</h3>
+          <ol>
+            <li>The <code>input</code> hook receives submitted prompt text before agent processing.</li>
+            <li><code>extractAtReferences()</code> finds unquoted <code>@path</code> and quoted <code>@&quot;path with spaces&quot;</code> references.</li>
+            <li><code>candidateReferencePaths()</code> normalizes candidates relative to the current project root and strips common trailing punctuation.</li>
+            <li>The first candidate present in <code>FileIndex.paths</code> is recorded.</li>
+            <li><code>FrecencyStore.record()</code> increments <code>count</code>, updates <code>lastAccessed</code>, marks the store dirty, and schedules a save.</li>
+          </ol>
+        </article>
+
+        <article class="card">
+          <h3>Score formula</h3>
+          <p>Frecency combines frequency and recency with a 14-day half-life. A file referenced many times remains useful, but stale history decays naturally.</p>
+          <pre><code>const age = Math.max(0, now - entry.lastAccessed);
+const recency = Math.pow(0.5, age / HALF_LIFE_MS);
+const score = Math.log2(entry.count + 1) * recency;</code></pre>
+        </article>
+
+        <div class="callout">
+          <strong>Why JSON instead of SQLite?</strong> The searchable file index is already in memory, and frecency lookups are O(1) map reads. JSON keeps installation dependency-free while still supporting atomic saves and pruning.
+        </div>
+      </section>
+
+      <section class="section" id="correctness">
+        <div class="section-head">
+          <h2>Correctness, cancellation, and edge cases</h2>
+          <p>The implementation favors predictable behavior under cancellation and session changes while keeping per-keystroke work bounded.</p>
+        </div>
+
+        <div class="grid two">
+          <article class="card">
+            <h3>Cancellation</h3>
+            <ul>
+              <li>Index rebuilds own an <code>AbortController</code>.</li>
+              <li><code>abort()</code> cancels walks and clears indexing state.</li>
+              <li>Search returns empty results when the autocomplete signal is aborted.</li>
+              <li>Stale rebuild promises are ignored before touching UI state.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Path safety</h3>
+            <ul>
+              <li>Submitted references normalize to project-relative paths.</li>
+              <li>References outside <code>cwd</code> are rejected.</li>
+              <li>Quoted references support escaped characters.</li>
+              <li>Only paths present in the local index update frecency.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Determinism</h3>
+            <ul>
+              <li>Ranking uses deterministic tie-breakers after score and frecency.</li>
+              <li>Stats are derived from the active entry snapshot.</li>
+              <li>Malformed frecency files are treated as empty stores.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Known non-goals</h3>
+            <ul>
+              <li>No persistent path index.</li>
+              <li>No filesystem watcher.</li>
+              <li>No cross-project aggregation.</li>
+              <li>No external <code>fzf</code>, <code>fd</code>, or sqlite runtime dependency.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="testing">
+        <div class="section-head">
+          <h2>Test coverage</h2>
+          <p>The test suite exercises query syntax, prefix/reference parsing, search ranking, excluded directories, and frecency decay.</p>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Test file</th><th>Coverage</th></tr></thead>
+            <tbody>
+              <tr><td><code>test/fzf.test.ts</code></td><td>fzf syntax, exact and boundary matching, camelCase boundaries, inverse terms, AND/OR, escaped tokens, separator scoring, and <code>@</code> prefix/reference parsing.</td></tr>
+              <tr><td><code>test/search.test.ts</code></td><td>Temporary project indexing, exclusion of <code>node_modules</code>, suffix filtering, and frecency tie-breaking.</td></tr>
+              <tr><td><code>test/frecency.test.ts</code></td><td>Real <code>FrecencyStore</code> scoring with the supplied clock and 14-day half-life decay.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <pre><code>npm run check
+# runs: tsc --noEmit &amp;&amp; bun test</code></pre>
+      </section>
+    </main>
+
+    <footer class="footer">
+      Generated architecture reference for <code>pi-fzf-files</code>. Styles are linked from <code>.docs/assets/architecture.css</code> for direct local viewing.
+    </footer>
+  </div>
+</body>
+</html>
