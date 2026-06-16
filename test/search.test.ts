@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -19,6 +19,48 @@ class MemoryFrecency {
 }
 
 describe("FileIndex", () => {
+  test("deduplicates concurrent rebuild requests", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-fzf-files-"));
+    try {
+      await writeFile(join(root, "alpha.ts"), "");
+
+      const index = new FileIndex(root, new MemoryFrecency() as never);
+      const first = index.rebuild();
+      const second = index.rebuild();
+
+      expect(second).toBe(first);
+      await first;
+      expect(index.hasPath("alpha.ts")).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the previous index visible until a rebuild is ready to swap", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-fzf-files-"));
+    try {
+      await writeFile(join(root, "old.ts"), "");
+
+      const index = new FileIndex(root, new MemoryFrecency() as never);
+      await index.rebuild();
+      expect(index.hasPath("old.ts")).toBe(true);
+
+      await unlink(join(root, "old.ts"));
+      await writeFile(join(root, "new.ts"), "");
+
+      const rebuild = index.rebuild();
+      const controller = new AbortController();
+      expect(index.search("old", { limit: 5, signal: controller.signal }).map((result) => result.path)).toEqual(["old.ts"]);
+
+      await rebuild;
+      expect(index.hasPath("old.ts")).toBe(false);
+      expect(index.hasPath("new.ts")).toBe(true);
+      expect(index.search("new", { limit: 5, signal: controller.signal }).map((result) => result.path)).toEqual(["new.ts"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("searches with fzf syntax and uses frecency as a tie-breaker", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-fzf-files-"));
     try {

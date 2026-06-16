@@ -53,6 +53,12 @@ interface RankedEntry {
   frecency: number;
 }
 
+interface FileIndexBuildState {
+  entries: IndexedPath[];
+  paths: Set<string>;
+  truncated: boolean;
+}
+
 const DEFAULT_MAX_ENTRIES = 120_000;
 const DEFAULT_MAX_DEPTH = 30;
 const DEFAULT_EXCLUDE_DIRS = new Set([
@@ -80,12 +86,13 @@ const DEFAULT_EXCLUDE_DIRS = new Set([
 
 export class FileIndex {
   private entries: IndexedPath[] = [];
-  private readonly paths = new Set<string>();
+  private paths = new Set<string>();
   private indexing = false;
   private truncated = false;
   private indexedAt: number | null = null;
   private lastDurationMs: number | null = null;
   private abortController: AbortController | undefined;
+  private rebuildPromise: Promise<void> | undefined;
 
   constructor(
     private readonly root: string,
@@ -123,29 +130,47 @@ export class FileIndex {
     this.indexing = false;
   }
 
-  async rebuild(): Promise<void> {
-    this.abort();
+  rebuild(): Promise<void> {
+    if (this.rebuildPromise) {
+      return this.rebuildPromise;
+    }
 
+    let promise: Promise<void>;
+    promise = this.performRebuild().finally(() => {
+      if (this.rebuildPromise === promise) {
+        this.rebuildPromise = undefined;
+      }
+    });
+    this.rebuildPromise = promise;
+    return promise;
+  }
+
+  private async performRebuild(): Promise<void> {
     const controller = new AbortController();
     this.abortController = controller;
     this.indexing = true;
-    this.truncated = false;
-    this.indexedAt = null;
-    this.entries = [];
-    this.paths.clear();
     const startedAt = Date.now();
+    const state: FileIndexBuildState = {
+      entries: [],
+      paths: new Set<string>(),
+      truncated: false,
+    };
 
     try {
-      await this.walkDirectory(this.root, "", 0, controller.signal);
+      await this.walkDirectory(this.root, "", 0, controller.signal, state);
       if (!controller.signal.aborted) {
-        this.indexedAt = Date.now();
-        this.lastDurationMs = this.indexedAt - startedAt;
+        const indexedAt = Date.now();
+        this.entries = state.entries;
+        this.paths = state.paths;
+        this.truncated = state.truncated;
+        this.indexedAt = indexedAt;
+        this.lastDurationMs = indexedAt - startedAt;
       }
     } finally {
       if (this.abortController === controller) {
         this.abortController = undefined;
-        this.indexing = false;
       }
+      this.indexing = false;
     }
   }
 
@@ -198,8 +223,9 @@ export class FileIndex {
     relDir: string,
     depth: number,
     signal: AbortSignal,
+    state: FileIndexBuildState,
   ): Promise<void> {
-    if (signal.aborted || this.truncated) return;
+    if (signal.aborted || state.truncated) return;
     if (depth > (this.options.maxDepth ?? DEFAULT_MAX_DEPTH)) return;
 
     let dir;
@@ -210,7 +236,7 @@ export class FileIndex {
     }
 
     for await (const dirent of dir) {
-      if (signal.aborted || this.truncated) return;
+      if (signal.aborted || state.truncated) return;
       const name = dirent.name;
       if (name === "." || name === "..") continue;
 
@@ -219,11 +245,11 @@ export class FileIndex {
       if (!isDirectory && !dirent.isFile()) continue;
 
       const relPath = joinDisplayPath(relDir, name);
-      this.addEntry(relPath, isDirectory);
+      this.addEntry(state, relPath, isDirectory);
       if (
-        this.entries.length >= (this.options.maxEntries ?? DEFAULT_MAX_ENTRIES)
+        state.entries.length >= (this.options.maxEntries ?? DEFAULT_MAX_ENTRIES)
       ) {
-        this.truncated = true;
+        state.truncated = true;
         return;
       }
 
@@ -233,12 +259,17 @@ export class FileIndex {
           relPath,
           depth + 1,
           signal,
+          state,
         );
       }
     }
   }
 
-  private addEntry(path: string, isDirectory: boolean): void {
+  private addEntry(
+    state: FileIndexBuildState,
+    path: string,
+    isDirectory: boolean,
+  ): void {
     const matchPath = isDirectory ? `${path}/` : path;
     const entry: IndexedPath = {
       path,
@@ -248,8 +279,8 @@ export class FileIndex {
       isDirectory,
       depth: depthOfDisplayPath(path),
     };
-    this.entries.push(entry);
-    this.paths.add(path);
+    state.entries.push(entry);
+    state.paths.add(path);
   }
 
   private shouldSkipDirectory(name: string): boolean {

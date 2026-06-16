@@ -12,6 +12,7 @@ const MAX_SUGGESTIONS = 20;
 export function createFzfFileAutocompleteProvider(
   current: AutocompleteProvider,
   fileIndex: FileIndex,
+  onAtQuery?: () => void,
 ): AutocompleteProvider {
   return {
     triggerCharacters: [...new Set([...(current.triggerCharacters ?? []), "@"])],
@@ -24,6 +25,8 @@ export function createFzfFileAutocompleteProvider(
       if (prefix === null) {
         return current.getSuggestions(lines, cursorLine, cursorCol, options);
       }
+
+      onAtQuery?.();
 
       if (options.signal.aborted) {
         return null;
