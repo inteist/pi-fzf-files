@@ -59,9 +59,11 @@ describe("fzf extended syntax", () => {
   });
 
   test("OR binds adjacent terms while other terms stay ANDed", () => {
+    expect(matches("^core go$ | rb$ | py$", "core.go")).toBe(true);
     expect(matches("^core go$ | rb$ | py$", "core.rb")).toBe(true);
     expect(matches("^core go$ | rb$ | py$", "core.py")).toBe(true);
     expect(matches("^core go$ | rb$ | py$", "other.rb")).toBe(false);
+    expect(matches("^core go$ | rb$ | py$", "core.txt")).toBe(false);
     expect(matches("foo | bar baz", "foo baz")).toBe(true);
     expect(matches("foo | bar baz", "bar baz")).toBe(true);
     expect(matches("foo | bar baz", "foo qux")).toBe(false);
@@ -71,6 +73,10 @@ describe("fzf extended syntax", () => {
   test("pipes are literal unless standalone between terms", () => {
     expect(matches("foo|bar", "docs/foo|bar.md")).toBe(true);
     expect(matches("foo|bar", "docs/foo-bar.md")).toBe(false);
+    expect(matches("foo|bar", "docs/foo.md")).toBe(false);
+    expect(matches("foo | bar", "docs/foo.md")).toBe(true);
+    expect(matches("foo | bar", "docs/bar.md")).toBe(true);
+    expect(matches("foo | bar", "docs/qux.md")).toBe(false);
     expect(matches("| foo", "docs/foo|bar.md")).toBe(true);
     expect(matches("foo |", "docs/foo.md")).toBe(true);
   });
