@@ -13,23 +13,23 @@ Pure TypeScript replacement for Pi's default `@` file-reference autocomplete. It
 - Skips heavy directories such as `.git`, `node_modules`, `dist`, `build`, `.next`, `coverage`, `target`, and virtualenv/cache folders.
 - Supports fzf extended syntax:
 
-| Token | Match type |
-| --- | --- |
-| `sbtrkt` | fuzzy subsequence |
-| `'wild` | exact substring |
-| `'wild'` | exact substring at word boundaries |
-| `^music` | prefix exact |
-| `.mp3$` | suffix exact |
-| `^music$` | exact whole path |
-| `!fire` | inverse exact substring |
-| `!^music` | inverse prefix exact |
-| `!.mp3$` | inverse suffix exact |
-| `foo bar` | AND |
-| `'match1 'match2` | AND of multiple exact substrings |
-| <code>foo &#124; bar</code> | OR between adjacent terms |
-| <code>^core go$ &#124; rb$ &#124; py$</code> | `^core` AND (`go$` OR `rb$` OR `py$`) |
-| <code>foo&#124;bar</code> | literal pipe inside a token |
-| `Foo` | smart-case match (uppercase makes that term case-sensitive) |
+| Input                                        | Match type                              | Description                                                                                                                                   |
+| -------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cmp`                                        | fuzzy-match                             | Items that match `cmp`, such as `ComponentMap` or `createMessageParser`.                                                                      |
+| `'useState`                                  | exact-match (quoted)                    | Items that include `useState`, such as `useStateReducer`.                                                                                     |
+| `'auth'`                                     | exact-boundary-match (quoted both ends) | Items that include `auth` at word boundaries, such as `auth-token` or `auth.service`.                                                         |
+| `^use`                                       | prefix-exact-match                      | Items that start with `use`, such as `useUserSession`.                                                                                        |
+| `Controller$`                                | suffix-exact-match                      | Items that end with `Controller`, such as `UserController`.                                                                                   |
+| `!deprecated`                                | inverse-exact-match                     | Items that do not include `deprecated`.                                                                                                       |
+| `!^legacy`                                   | inverse-prefix-exact-match              | Items that do not start with `legacy`.                                                                                                        |
+| `!Spec$`                                     | inverse-suffix-exact-match              | Items that do not end with `Spec`.                                                                                                            |
+| `sb controller`                              | multiple-terms (AND)                    | Items that match both `sb` AND `controller`, such as `SidebarController`.                                                                     |
+| <code>sb &#124; controller</code>            | OR-match                                | Items that match either `sb` OR `controller`, such as `Sidebar` or `UserController`.                                                          |
+| <code>'controller auth &#124; session</code> | exact AND OR-match                      | Items containing `controller` exactly, and matching either `auth` or `session` fuzzy, such as `AuthController.ts` or `session_controller.rb`. |
+| <code>'auth &#124; 'session</code>           | multiple exact (OR)                     | Items containing either `auth` exactly or `session` exactly, such as `auth.ts` or `session.py` (excluding `author.ts`).                       |
+| `'src 'test`                                 | multiple exact (AND)                    | Items containing both `src` exactly and `test` exactly, such as `src/app.test.ts`.                                                            |
+| <code>foo&#124;bar</code>                    | literal pipe                            | Matches a literal pipe inside a token, such as `docs/foo\|bar.md` (no spaces around `\|`).                                                    |
+| `Foo`                                        | smart-case match                        | Uppercase characters make the term case-sensitive (e.g., `Foo` only matches items containing `Foo`, but `foo` matches both `foo` and `Foo`).  |
 
 Spaces can be escaped inside a token with `\`.
 
@@ -66,7 +66,8 @@ If you also want Pi startup to avoid provisioning the built-in `fd` helper entir
 /fzf-files clear-frecency
 ```
 
-`/fzf-files help` prints a Markdown table with the main `@` usage patterns and maintenance commands.
+`/fzf-files help` opens a formatted Markdown help view with separate command and syntax-example tables
+`/fzf-files syntax` opens a syntax examples table
 
 ## Development
 
