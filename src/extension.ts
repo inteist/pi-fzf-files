@@ -1,4 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, matchesKey, Text } from "@earendil-works/pi-tui";
 
 import { FileIndex } from "./file-index.js";
 import { FrecencyStore } from "./frecency.js";
@@ -124,7 +126,7 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       const command = args.trim().toLowerCase() || "stats";
       if (isHelpCommand(command)) {
-        ctx.ui.notify(formatHelp(), "info");
+        await showHelp(ctx);
         return;
       }
 
@@ -173,6 +175,37 @@ function formatStatusLine(stats: ReturnType<FileIndex["getStats"]>): string {
 
 function isHelpCommand(command: string): boolean {
   return command === "help" || command === "--help" || command === "-h" || command === "?";
+}
+
+async function showHelp(ctx: ExtensionContext): Promise<void> {
+  const markdown = formatHelp();
+
+  if (ctx.mode !== "tui") {
+    ctx.ui.notify(markdown, "info");
+    return;
+  }
+
+  await ctx.ui.custom((_tui, theme, _kb, done) => {
+    const container = new Container();
+    const border = new DynamicBorder((s: string) => theme.fg("accent", s));
+    const mdTheme = getMarkdownTheme();
+
+    container.addChild(border);
+    container.addChild(new Text(theme.fg("accent", theme.bold("fzf-files help")), 1, 0));
+    container.addChild(new Markdown(markdown, 1, 1, mdTheme));
+    container.addChild(new Text(theme.fg("dim", "Press Enter, Esc, or q to close"), 1, 0));
+    container.addChild(border);
+
+    return {
+      render: (width: number) => container.render(width),
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        if (matchesKey(data, "enter") || matchesKey(data, "escape") || data === "q") {
+          done(undefined);
+        }
+      },
+    };
+  });
 }
 
 function formatHelp(): string {
