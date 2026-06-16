@@ -18,7 +18,7 @@ type Runtime = {
 export default function fzfFilesExtension(pi: ExtensionAPI): void {
   let runtime: Runtime | undefined;
 
-  const rebuild = async (ctx: ExtensionContext, reason: "lazy" | "manual"): Promise<void> => {
+  const rebuild = async (ctx: ExtensionContext, reason: "startup" | "at" | "manual"): Promise<void> => {
     const active = runtime;
     if (!active) return;
 
@@ -77,18 +77,16 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
     const index = new FileIndex(ctx.cwd, frecency);
     runtime = { cwd: ctx.cwd, frecency, index, rebuildPromise: undefined };
 
-    ctx.ui.setStatus(STATUS_KEY, "fzf: lazy (type @)");
     ctx.ui.addAutocompleteProvider((current) =>
       createFzfFileAutocompleteProvider(current, index, () => {
         const active = runtime;
         if (!active || active.index !== index || active.cwd !== ctx.cwd) return;
+        if (active.index.getStats().indexing) return;
 
-        const stats = active.index.getStats();
-        if (stats.indexedAt !== null || stats.indexing) return;
-
-        void rebuild(ctx, "lazy");
+        void rebuild(ctx, "at");
       }),
     );
+    void rebuild(ctx, "startup");
   });
 
   pi.on("input", (event, ctx) => {
@@ -165,7 +163,7 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
 
 function formatStatusLine(stats: ReturnType<FileIndex["getStats"]>): string {
   if (stats.entries === 0 && stats.indexedAt === null) {
-    return stats.indexing ? "fzf: indexing…" : "fzf: lazy (type @)";
+    return stats.indexing ? "fzf: indexing…" : "fzf: not indexed";
   }
 
   const truncated = stats.truncated ? ", truncated" : "";
@@ -183,7 +181,7 @@ function formatHelp(): string {
     "",
     "| Usage | Example | Notes |",
     "| --- | --- | --- |",
-    "| Start lazy indexing | `@` | First use builds the in-memory index in the background. |",
+    "| Refresh index on use | `@` | Entering an `@` file query starts a background reindex if one is not already running. |",
     "| Fuzzy file search | `@cmp ts` | Space-separated fzf terms are ANDed. |",
     "| Exact substring | `@'README` | Leading `'` switches a term to exact substring matching. |",
     "| Prefix/suffix anchors | `@^src .test.ts$` | Use `^` and `$` to anchor individual terms. |",

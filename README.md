@@ -1,12 +1,13 @@
 # pi-fzf-files
 
-Pure TypeScript replacement for Pi's default `@` file-reference autocomplete. It lazily builds an in-memory file index the first time you use `@` and searches it with fzf-style extended query syntax—no `fzf`, `fd`, sqlite package, or other runtime dependency required.
+Pure TypeScript replacement for Pi's default `@` file-reference autocomplete. It builds an in-memory file index on session start/restart, refreshes it asynchronously when you use `@`, and searches it with fzf-style extended query syntax—no `fzf`, `fd`, sqlite package, or other runtime dependency required.
 
 ## Features
 
 - Replaces `@...` file suggestions through `ctx.ui.addAutocompleteProvider()`.
 - Does **not** delegate on `@` misses, so Pi's default `fd`-backed finder does not appear for file references.
-- Lazily starts indexing on first `@` use instead of blocking session startup.
+- Starts indexing asynchronously on every session start/restart.
+- Starts a background reindex when you enter an `@` file query, unless one is already running.
 - Searches a cached in-memory index instead of walking the filesystem per keystroke.
 - Rebuilds into a temporary index and atomically swaps it in, so background reindexing does not clear existing suggestions.
 - Skips heavy directories such as `.git`, `node_modules`, `dist`, `build`, `.next`, `coverage`, `target`, and virtualenv/cache folders.

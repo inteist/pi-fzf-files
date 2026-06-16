@@ -12,8 +12,10 @@ const MAX_SUGGESTIONS = 20;
 export function createFzfFileAutocompleteProvider(
   current: AutocompleteProvider,
   fileIndex: FileIndex,
-  onAtQuery?: () => void,
+  onAtInvocation?: () => void,
 ): AutocompleteProvider {
+  let inAtQuery = false;
+
   return {
     triggerCharacters: [...new Set([...(current.triggerCharacters ?? []), "@"])],
 
@@ -23,10 +25,14 @@ export function createFzfFileAutocompleteProvider(
       const prefix = extractAtFzfPrefix(textBeforeCursor);
 
       if (prefix === null) {
+        inAtQuery = false;
         return current.getSuggestions(lines, cursorLine, cursorCol, options);
       }
 
-      onAtQuery?.();
+      if (!inAtQuery) {
+        inAtQuery = true;
+        onAtInvocation?.();
+      }
 
       if (options.signal.aborted) {
         return null;
