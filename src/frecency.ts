@@ -1,7 +1,17 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import {
+  type FileHandle,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export interface FrecencyEntry {
   count: number;
@@ -19,16 +29,22 @@ const VERSION = 1;
 const SAVE_DEBOUNCE_MS = 750;
 const DEFAULT_MAX_ENTRIES = 20_000;
 const HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1_000;
+const LOCK_RETRY_MS = 25;
+const LOCK_STALE_MS = 30_000;
 
 export class FrecencyStore {
   private readonly entries = new Map<string, FrecencyEntry>();
+  private baselineEntries = new Map<string, FrecencyEntry>();
+  private readonly cwd: string;
   private readonly filePath: string;
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   private dirty = false;
+  private replaceOnFlush = false;
   private savePromise: Promise<void> = Promise.resolve();
 
-  constructor(private readonly cwd: string) {
-    this.filePath = getFrecencyFilePath(cwd);
+  constructor(cwd: string) {
+    this.cwd = resolve(cwd);
+    this.filePath = getFrecencyFilePath(this.cwd);
   }
 
   get path(): string {
@@ -40,21 +56,10 @@ export class FrecencyStore {
   }
 
   async load(): Promise<void> {
-    this.entries.clear();
-    try {
-      const content = await readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(content) as Partial<FrecencyFile>;
-      if (parsed.version !== VERSION || parsed.cwd !== this.cwd || !parsed.entries) {
-        return;
-      }
-
-      for (const [path, entry] of Object.entries(parsed.entries)) {
-        if (!isValidEntry(entry)) continue;
-        this.entries.set(path, entry);
-      }
-    } catch {
-      // Missing or malformed frecency files are treated as an empty store.
-    }
+    replaceEntries(this.entries, await this.readEntriesFromDisk());
+    this.baselineEntries = cloneEntries(this.entries);
+    this.dirty = false;
+    this.replaceOnFlush = false;
   }
 
   record(path: string, now = Date.now()): void {
@@ -80,7 +85,9 @@ export class FrecencyStore {
 
   clear(): void {
     this.entries.clear();
+    this.baselineEntries.clear();
     this.dirty = true;
+    this.replaceOnFlush = true;
     this.scheduleSave();
   }
 
@@ -105,36 +112,115 @@ export class FrecencyStore {
     }
 
     this.dirty = false;
-    this.prune(DEFAULT_MAX_ENTRIES);
-    this.savePromise = this.savePromise.then(() => this.writeFile());
+    const replaceOnFlush = this.replaceOnFlush;
+    this.replaceOnFlush = false;
+    this.savePromise = this.savePromise.catch(() => undefined).then(async () => {
+      try {
+        await this.withFileLock(async () => {
+          const entriesToWrite = replaceOnFlush
+            ? cloneEntries(this.entries)
+            : await this.mergeWithDisk();
+          pruneEntries(entriesToWrite, DEFAULT_MAX_ENTRIES);
+          await this.writeEntries(entriesToWrite);
+          this.baselineEntries = cloneEntries(entriesToWrite);
+
+          if (!this.dirty && !this.replaceOnFlush) {
+            replaceEntries(this.entries, entriesToWrite);
+          }
+        });
+      } catch (error) {
+        this.dirty = true;
+        throw error;
+      }
+    });
     await this.savePromise;
   }
 
-  private prune(maxEntries: number): void {
-    if (this.entries.size <= maxEntries) return;
+  private async mergeWithDisk(): Promise<Map<string, FrecencyEntry>> {
+    const merged = await this.readEntriesFromDisk();
 
-    const keep = [...this.entries.entries()]
-      .sort((left, right) => {
-        const leftEntry = left[1];
-        const rightEntry = right[1];
-        if (leftEntry.lastAccessed !== rightEntry.lastAccessed) {
-          return rightEntry.lastAccessed - leftEntry.lastAccessed;
+    for (const [path, entry] of this.entries) {
+      const baseline = this.baselineEntries.get(path);
+      const countDelta = baseline
+        ? Math.max(0, entry.count - baseline.count)
+        : entry.count;
+      if (countDelta <= 0) continue;
+
+      const existing = merged.get(path);
+      const firstAccessed = baseline ? entry.lastAccessed : entry.firstAccessed;
+      if (existing) {
+        existing.count += countDelta;
+        existing.firstAccessed = Math.min(
+          existing.firstAccessed,
+          firstAccessed,
+        );
+        existing.lastAccessed = Math.max(existing.lastAccessed, entry.lastAccessed);
+      } else {
+        merged.set(path, {
+          count: countDelta,
+          firstAccessed,
+          lastAccessed: entry.lastAccessed,
+        });
+      }
+    }
+
+    return merged;
+  }
+
+  private async readEntriesFromDisk(): Promise<Map<string, FrecencyEntry>> {
+    const entries = new Map<string, FrecencyEntry>();
+
+    try {
+      const content = await readFile(this.filePath, "utf8");
+      const parsed = JSON.parse(content) as Partial<FrecencyFile>;
+      const parsedCwd = typeof parsed.cwd === "string" ? resolve(parsed.cwd) : undefined;
+      if (parsed.version !== VERSION || parsedCwd !== this.cwd || !parsed.entries) {
+        return entries;
+      }
+
+      for (const [path, entry] of Object.entries(parsed.entries)) {
+        if (!isValidEntry(entry)) continue;
+        entries.set(path, cloneEntry(entry));
+      }
+    } catch {
+      // Missing or malformed frecency files are treated as an empty store.
+    }
+
+    return entries;
+  }
+
+  private async withFileLock(run: () => Promise<void>): Promise<void> {
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const lockPath = `${this.filePath}.lock`;
+
+    while (true) {
+      let handle: FileHandle | undefined;
+      try {
+        handle = await open(lockPath, "wx");
+        try {
+          await handle.writeFile(`${process.pid}\n`, "utf8");
+          await run();
+        } finally {
+          await handle.close().catch(() => undefined);
+          await unlink(lockPath).catch(() => undefined);
         }
-        return rightEntry.count - leftEntry.count;
-      })
-      .slice(0, maxEntries);
-
-    this.entries.clear();
-    for (const [path, entry] of keep) {
-      this.entries.set(path, entry);
+        return;
+      } catch (error) {
+        await handle?.close().catch(() => undefined);
+        if (!isFileExistsError(error)) throw error;
+        if ((await isStaleLock(lockPath)) && (await tryUnlink(lockPath))) {
+          continue;
+        }
+        await delay(LOCK_RETRY_MS);
+      }
     }
   }
 
-  private async writeFile(): Promise<void> {
+  private async writeEntries(entries: Map<string, FrecencyEntry>): Promise<void> {
     const file: FrecencyFile = {
       version: VERSION,
       cwd: this.cwd,
-      entries: Object.fromEntries(this.entries),
+      entries: Object.fromEntries(entries),
     };
 
     await mkdir(dirname(this.filePath), { recursive: true });
@@ -158,8 +244,83 @@ function isValidEntry(value: unknown): value is FrecencyEntry {
   );
 }
 
+function pruneEntries(entries: Map<string, FrecencyEntry>, maxEntries: number): void {
+  if (entries.size <= maxEntries) return;
+
+  const keep = [...entries.entries()]
+    .sort((left, right) => {
+      const leftEntry = left[1];
+      const rightEntry = right[1];
+      if (leftEntry.lastAccessed !== rightEntry.lastAccessed) {
+        return rightEntry.lastAccessed - leftEntry.lastAccessed;
+      }
+      return rightEntry.count - leftEntry.count;
+    })
+    .slice(0, maxEntries);
+
+  entries.clear();
+  for (const [path, entry] of keep) {
+    entries.set(path, entry);
+  }
+}
+
+function replaceEntries(
+  target: Map<string, FrecencyEntry>,
+  source: Map<string, FrecencyEntry>,
+): void {
+  target.clear();
+  for (const [path, entry] of source) {
+    target.set(path, cloneEntry(entry));
+  }
+}
+
+function cloneEntries(
+  entries: Map<string, FrecencyEntry>,
+): Map<string, FrecencyEntry> {
+  const clone = new Map<string, FrecencyEntry>();
+  replaceEntries(clone, entries);
+  return clone;
+}
+
+function cloneEntry(entry: FrecencyEntry): FrecencyEntry {
+  return {
+    count: entry.count,
+    firstAccessed: entry.firstAccessed,
+    lastAccessed: entry.lastAccessed,
+  };
+}
+
+async function isStaleLock(path: string): Promise<boolean> {
+  try {
+    const stats = await stat(path);
+    return Date.now() - stats.mtimeMs > LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === "EEXIST"
+  );
+}
+
+async function tryUnlink(path: string): Promise<boolean> {
+  try {
+    await unlink(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
 function getFrecencyFilePath(cwd: string): string {
-  const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
   const digest = createHash("sha256").update(cwd).digest("hex").slice(0, 24);
-  return join(agentDir, "fzf-files", "frecency-v1", `${digest}.json`);
+  return join(getAgentDir(), "fzf-files", "frecency-v1", `${digest}.json`);
 }
