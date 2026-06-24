@@ -1,4 +1,6 @@
-# pi-fzf-files
+![pi-fzf-files banner](./pi-fzf-files.png)
+
+# pi-fzf-files - Pi extension
 
 Pure TypeScript replacement for Pi's default `@` file-reference autocomplete. It builds an in-memory file index on session start/restart, refreshes it asynchronously when you use `@`, and searches it with fzf-style extended query syntax—no `fzf`, `fd`, sqlite package, or other runtime dependency required.
 
@@ -45,7 +47,19 @@ Ranking uses match quality first. Frecency is a tie-breaker, so frequently/recen
 
 SQLite would only help once the index itself lives on disk or queries need cross-project aggregation. For this extension the hot path is an in-memory top-K scan over cached paths, while frecency lookups are O(1) map reads. The JSON store keeps runtime installs dependency-free and portable across Pi's supported Node runtimes.
 
-## Install / try
+## Install
+
+From npm:
+
+```bash
+pi install npm:pi-fzf-files
+```
+
+Try it without installing permanently:
+
+```bash
+pi -e npm:pi-fzf-files
+```
 
 From this repository:
 

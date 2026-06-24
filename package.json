@@ -1,7 +1,7 @@
 {
   "name": "pi-fzf-files",
   "version": "0.1.0",
-  "description": "Replace Pi's @ file autocomplete with a pure TypeScript fzf-style fuzzy finder.",
+  "description": "Zero dependencies, pure TS, Pi's @ file fzf-style syntax fuzzy finder.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -18,20 +18,35 @@
     "src/",
     "README.md",
     "LICENSE",
+    "pi-fzf-files.png",
     "tsconfig.json"
   ],
   "scripts": {
+    "clean": "rm -rf dist",
     "build": "echo 'nothing to build'",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
-    "prepack": "npm run build",
-    "prepublishOnly": "npm run check"
+    "prepack": "npm run clean && npm run build",
+    "prepublishOnly": "npm run check",
+    "deploy": "npm install && npm run check && npm run build && npm publish --access public"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/inteist/pi-fzf-files.git"
+  },
+  "bugs": {
+    "url": "https://github.com/inteist/pi-fzf-files/issues"
+  },
+  "homepage": "https://github.com/inteist/pi-fzf-files#readme",
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://github.com/inteist/pi-fzf-files/raw/main/pi-fzf-files.png"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
