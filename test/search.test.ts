@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm, unlink } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, symlink, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -87,6 +87,47 @@ describe("FileIndex", () => {
       expect(testResults.map((result) => result.path)).toEqual(["src/beta.test.ts"]);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("follows symlinked files and directories without recursing through cycles", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-fzf-files-"));
+    const external = await mkdtemp(join(tmpdir(), "pi-fzf-files-external-"));
+    try {
+      await mkdir(join(root, "real-dir"), { recursive: true });
+      await writeFile(join(root, "real-file.txt"), "");
+      await writeFile(join(root, "real-dir", "nested.txt"), "");
+      await writeFile(join(external, "outside.txt"), "");
+
+      try {
+        await symlink("real-file.txt", join(root, "link-file.txt"));
+        await symlink("real-dir", join(root, "link-dir"), "dir");
+        await symlink("missing.txt", join(root, "dangling.txt"));
+        await symlink("..", join(root, "real-dir", "parent-link"), "dir");
+        await symlink(external, join(root, "external-link"), "dir");
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code === "EPERM" || code === "EACCES") return;
+        throw error;
+      }
+
+      const index = new FileIndex(root, new MemoryFrecency() as never);
+      await index.rebuild();
+
+      expect(index.hasPath("real-file.txt")).toBe(true);
+      expect(index.hasPath("link-file.txt")).toBe(true);
+      expect(index.hasPath("real-dir/nested.txt")).toBe(true);
+      expect(index.hasPath("link-dir")).toBe(true);
+      expect(index.hasPath("link-dir/nested.txt")).toBe(true);
+      expect(index.hasPath("external-link/outside.txt")).toBe(true);
+      expect(index.hasPath("dangling.txt")).toBe(false);
+
+      expect(index.hasPath("real-dir/parent-link")).toBe(true);
+      expect(index.hasPath("real-dir/parent-link/real-file.txt")).toBe(false);
+      expect(index.hasPath("link-dir/parent-link/real-file.txt")).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(external, { recursive: true, force: true });
     }
   });
 });
