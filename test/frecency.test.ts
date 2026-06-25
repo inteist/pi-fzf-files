@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
-import { FrecencyStore } from "../src/frecency.js";
+import { type FrecencyEntry, FrecencyStore } from "../src/frecency.js";
 
 const HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1_000;
 
@@ -64,7 +64,52 @@ describe("FrecencyStore", () => {
       expect(persisted.entries["src/other.ts"]?.count).toBe(1);
     });
   });
+
+  test("retries a failed clear as a replacement write", async () => {
+    await withAgentDir(async () => {
+      const project = "/tmp/pi-fzf-project";
+      const store = new FrecencyStore(project);
+      store.record("src/app.ts", 1_700_000_000_000);
+      await store.flush();
+
+      store.clear();
+      failNextWrite(store);
+
+      let failed = false;
+      try {
+        await store.flush();
+      } catch {
+        failed = true;
+      }
+
+      expect(failed).toBe(true);
+      await store.flush();
+
+      const reloaded = new FrecencyStore(project);
+      await reloaded.load();
+      expect(reloaded.size).toBe(0);
+    });
+  });
 });
+
+type WritableFrecencyStore = {
+  writeEntries: (entries: Map<string, FrecencyEntry>) => Promise<void>;
+};
+
+function failNextWrite(store: FrecencyStore): void {
+  const writable = store as unknown as WritableFrecencyStore;
+  const writeEntries = writable.writeEntries.bind(store);
+  let failed = false;
+
+  writable.writeEntries = async (entries) => {
+    if (!failed) {
+      failed = true;
+      throw new Error("injected write failure");
+    }
+
+    await writeEntries(entries);
+  };
+}
 
 async function withAgentDir(run: () => Promise<void>): Promise<void> {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-fzf-frecency-"));
