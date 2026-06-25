@@ -12,6 +12,7 @@ Pure TypeScript replacement for Pi's default `@` file-reference autocomplete. It
 - Starts a background reindex when you enter an `@` file query, unless one is already running.
 - Searches a cached in-memory index instead of walking the filesystem per keystroke.
 - Rebuilds into a temporary index and atomically swaps it in, so background reindexing does not clear existing suggestions.
+- Follows symlinked files and directories while avoiding recursive symlink cycles.
 - Skips heavy directories such as `.git`, `node_modules`, `dist`, `build`, `.next`, `coverage`, `target`, and virtualenv/cache folders.
 - Supports fzf extended syntax:
 

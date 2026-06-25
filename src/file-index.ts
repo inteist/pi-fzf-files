@@ -1,4 +1,4 @@
-import { opendir } from "node:fs/promises";
+import { opendir, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { FrecencyStore } from "./frecency.js";
@@ -157,7 +157,22 @@ export class FileIndex {
     };
 
     try {
-      await this.walkDirectory(this.root, "", 0, controller.signal, state);
+      let rootRealDir: string;
+      try {
+        rootRealDir = await realpath(this.root);
+      } catch {
+        return;
+      }
+
+      await this.walkDirectory(
+        this.root,
+        rootRealDir,
+        "",
+        0,
+        controller.signal,
+        state,
+        new Set<string>(),
+      );
       if (!controller.signal.aborted) {
         const indexedAt = Date.now();
         this.entries = state.entries;
@@ -220,49 +235,101 @@ export class FileIndex {
 
   private async walkDirectory(
     absDir: string,
+    realDir: string,
     relDir: string,
     depth: number,
     signal: AbortSignal,
     state: FileIndexBuildState,
+    activeRealDirs: Set<string>,
   ): Promise<void> {
     if (signal.aborted || state.truncated) return;
     if (depth > (this.options.maxDepth ?? DEFAULT_MAX_DEPTH)) return;
+    if (activeRealDirs.has(realDir)) return;
+    activeRealDirs.add(realDir);
 
-    let dir;
     try {
-      dir = await opendir(absDir);
-    } catch {
-      return;
-    }
-
-    for await (const dirent of dir) {
-      if (signal.aborted || state.truncated) return;
-      const name = dirent.name;
-      if (name === "." || name === "..") continue;
-
-      const isDirectory = dirent.isDirectory();
-      if (isDirectory && this.shouldSkipDirectory(name)) continue;
-      if (!isDirectory && !dirent.isFile()) continue;
-
-      const relPath = joinDisplayPath(relDir, name);
-      this.addEntry(state, relPath, isDirectory);
-      if (
-        state.entries.length >= (this.options.maxEntries ?? DEFAULT_MAX_ENTRIES)
-      ) {
-        state.truncated = true;
+      let dir;
+      try {
+        dir = await opendir(absDir);
+      } catch {
         return;
       }
 
-      if (isDirectory) {
-        await this.walkDirectory(
-          join(absDir, name),
-          relPath,
-          depth + 1,
-          signal,
-          state,
-        );
+      for await (const dirent of dir) {
+        if (signal.aborted || state.truncated) return;
+        const name = dirent.name;
+        if (name === "." || name === "..") continue;
+
+        let isDirectory = false;
+        let childRealDir: string | undefined;
+        const absPath = join(absDir, name);
+
+        if (dirent.isDirectory()) {
+          isDirectory = true;
+          childRealDir = join(realDir, name);
+        } else if (dirent.isFile()) {
+          isDirectory = false;
+        } else if (dirent.isSymbolicLink()) {
+          const symlinkKind = await this.resolveSymlinkKind(absPath);
+          if (signal.aborted || state.truncated) return;
+          if (symlinkKind === null) continue;
+
+          isDirectory = symlinkKind === "directory";
+        } else {
+          continue;
+        }
+
+        if (isDirectory && this.shouldSkipDirectory(name)) continue;
+
+        const relPath = joinDisplayPath(relDir, name);
+        this.addEntry(state, relPath, isDirectory);
+        if (
+          state.entries.length >=
+          (this.options.maxEntries ?? DEFAULT_MAX_ENTRIES)
+        ) {
+          state.truncated = true;
+          return;
+        }
+
+        if (isDirectory) {
+          if (childRealDir === undefined) {
+            try {
+              childRealDir = await realpath(absPath);
+            } catch {
+              continue;
+            }
+            if (signal.aborted || state.truncated) return;
+          }
+
+          await this.walkDirectory(
+            absPath,
+            childRealDir,
+            relPath,
+            depth + 1,
+            signal,
+            state,
+            activeRealDirs,
+          );
+        }
       }
+    } finally {
+      activeRealDirs.delete(realDir);
     }
+  }
+
+  private async resolveSymlinkKind(
+    absPath: string,
+  ): Promise<"file" | "directory" | null> {
+    try {
+      const target = await stat(absPath);
+      if (target.isDirectory()) return "directory";
+      if (target.isFile()) return "file";
+    } catch {
+      // Broken or unreadable symlinks are skipped, matching the existing
+      // best-effort behavior for directories that cannot be opened.
+    }
+
+    return null;
   }
 
   private addEntry(
