@@ -1,6 +1,6 @@
 {
   "name": "pi-fzf-files",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Zero dependencies, pure TS, Pi's @ file fzf-style syntax fuzzy finder.",
   "type": "module",
   "keywords": [
