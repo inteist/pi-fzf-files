@@ -66,18 +66,13 @@ export function createFzfFileAutocompleteProvider(
 }
 
 export function stripAtQueryPrefix(prefix: string): string {
-  if (prefix.startsWith('@"')) {
-    return prefix.slice(2);
-  }
+  if (prefix.startsWith('@"')) return prefix.slice(2);
   return prefix.startsWith("@") ? prefix.slice(1) : prefix;
 }
 
 function toAutocompleteItem(match: FileSearchResult): AutocompleteItem {
   const descriptionParts = [match.description];
-  if (match.frecency > 0) {
-    descriptionParts.push(`freq ${match.frecency.toFixed(2)}`);
-  }
-
+  if (match.frecency > 0) descriptionParts.push(`freq ${match.frecency.toFixed(2)}`);
   return {
     value: match.value,
     label: match.label,
