@@ -10,6 +10,10 @@ Pure TypeScript replacement for Pi's default `@` file-reference autocomplete. It
 - Does **not** delegate on `@` misses, so Pi's default `fd`-backed finder does not appear for file references.
 - Starts indexing asynchronously on every session start/restart.
 - Starts a background reindex when you enter an `@` file query, unless one is already running.
+- Returns results from the refreshed index (including an in-flight startup build), so new files appear without another keystroke. Initial suggestions wait for that filesystem walk; typing stays responsive.
+- Keeps multi-term queries updating while the first refresh is pending, even before a suggestion popup exists.
+- Refreshes again when you clear the query back to `@` or `@"`, start another `@` token, or replace/submit the prompt—even if Pi's autocomplete debounce skips the intermediate state.
+- Cancels obsolete suggestion requests without cancelling the shared rebuild. Failed refreshes retain the last good index and can be retried.
 - Searches a cached in-memory index instead of walking the filesystem per keystroke.
 - Rebuilds into a temporary index and atomically swaps it in, so background reindexing does not clear existing suggestions.
 - Follows symlinked files and directories while avoiding recursive symlink cycles.
@@ -72,6 +76,14 @@ pi install ./pi-fzf-files
 
 If you also want Pi startup to avoid provisioning the built-in `fd` helper entirely, run Pi with `PI_OFFLINE=1` or add a Pi core setting when available. This extension itself never invokes `fd`.
 
+## Editor integration and refresh latency
+
+The normal Pi editor and compatible `CustomEditor` subclasses are supported. The extension composes with the existing editor factory and observes edits before autocomplete debouncing. It does not synthesize Tab or accept results automatically.
+
+Pi currently has no public autocomplete retrigger/cancel API. The small, capability-checked adapter in `src/editor-adapter.ts` uses Pi's internal request/cancel methods, tested against pi-tui **0.79.4**. Unsupported custom editors are left unchanged and produce a warning. An editor extension loaded later can also replace this adapter. In either case, press **Tab** with the popup closed to force a fresh file lookup.
+
+The first result for an invocation waits for the current index rebuild, so large repositories or slow filesystems can delay the popup. Subsequent edits share that rebuild and then search the cached index; they do not walk the filesystem on every normal keystroke. Escape dismisses a pending lookup. If a rebuild fails, the extension reports the error, serves cached results where available, and retries on the next request.
+
 ## Commands
 
 ```text
@@ -90,3 +102,5 @@ If you also want Pi startup to avoid provisioning the built-in `fd` helper entir
 bun test
 npm run typecheck
 ```
+
+Tests include the real pi-tui editor's debounce, cancellation, and completion paths. `test/setup.ts` loads the real `CustomEditor` and agent-directory configuration directly, avoiding the SDK barrel's unrelated CLI/provider initialization; only Markdown-help UI exports are stubbed. It does not validate the full SDK boot or the Markdown help dialog.
