@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- `@` autocomplete now waits for its background refresh, including an already-running startup rebuild, before returning results so newly indexed files appear without another keystroke.
+- Clearing a query back to `@` or `@"`, starting another `@` token, or completing a reference resets the refresh cycle instead of leaving the provider latched to an old invocation.
+- Cancelled autocomplete requests release promptly without cancelling the shared index rebuild.
+- Multi-term queries and operators entered during a pending refresh now retrigger completion before a popup exists.
+- Editor-side observation catches query/prompt resets hidden by debouncing; explicit Tab completion can force a fresh lookup.
+- Failed refreshes fall back to the cached index and allow retry; retired session providers release pending requests and ignore late results.
+- The editor adapter preserves existing custom-editor factories, respects Escape and accepted completions, and restores its hooks on shutdown.
+
+### Tests
+
+- Added real-editor regression coverage for debounce, pending refreshes, prompt replacement, cancellation, and completion behavior, plus refresh-failure and session-lifecycle tests.
+
 ## [0.2.0] - 2026-06-25
 
 ### Added
