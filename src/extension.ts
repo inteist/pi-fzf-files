@@ -38,18 +38,19 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
     if (existing) {
       if (reason === "manual") {
         ctx.ui.notify("fzf-files: reindex already running", "info");
-        try {
-          await existing;
-        } catch {
-          return;
-        }
-        if (runtime === active) {
-          const stats = active.index.getStats();
-          ctx.ui.notify(
-            formatStats(stats),
-            stats.truncated ? "warning" : "info"
-          );
-        }
+      }
+      try {
+        await existing;
+      } catch (error) {
+        if (reason === "at") throw error;
+        return;
+      }
+      if (reason === "manual" && runtime === active) {
+        const stats = active.index.getStats();
+        ctx.ui.notify(
+          formatStats(stats),
+          stats.truncated ? "warning" : "info"
+        );
       }
       return;
     }
@@ -81,6 +82,7 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
     } finally {
       if (active.rebuildPromise === promise) {
         active.rebuildPromise = undefined;
+      if (reason === "at") throw error;
       }
     }
   };
