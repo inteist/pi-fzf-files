@@ -4,16 +4,18 @@ import type {
   ExtensionContext
 } from "@earendil-works/pi-coding-agent";
 import {
+  CustomEditor,
   DynamicBorder,
   getMarkdownTheme
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, matchesKey, Text } from "@earendil-works/pi-tui";
 
+import { attachFzfEditor } from "./editor-adapter.js";
 import { FileIndex } from "./file-index.js";
 import { FrecencyStore } from "./frecency.js";
 import { candidateReferencePaths } from "./path-utils.js";
 import { extractAtReferences } from "./prefix.js";
-import { createFzfFileAutocompleteProvider } from "./provider.js";
+import { createFzfFileAutocompleteProvider, type FzfFileAutocompleteProvider } from "./provider.js";
 
 const STATUS_KEY = "fzf-files";
 
@@ -22,6 +24,7 @@ type Runtime = {
   frecency: FrecencyStore;
   index: FileIndex;
   rebuildPromise: Promise<void> | undefined;
+  dispose: () => void;
 };
 
 export default function fzfFilesExtension(pi: ExtensionAPI): void {
@@ -79,10 +82,10 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
         `fzf-files: failed to index files: ${formatError(error)}`,
         "error"
       );
+      if (reason === "at") throw error;
     } finally {
       if (active.rebuildPromise === promise) {
         active.rebuildPromise = undefined;
-      if (reason === "at") throw error;
       }
     }
   };
@@ -90,23 +93,57 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     const previous = runtime;
     runtime = undefined;
+    previous?.dispose();
     previous?.index.abort();
     await previous?.frecency.flush();
 
     const frecency = new FrecencyStore(ctx.cwd);
     await frecency.load();
     const index = new FileIndex(ctx.cwd, frecency);
-    runtime = { cwd: ctx.cwd, frecency, index, rebuildPromise: undefined };
+    let provider: FzfFileAutocompleteProvider | undefined;
+    let restoreEditor: (() => void) | undefined;
+    runtime = {
+      cwd: ctx.cwd, frecency, index, rebuildPromise: undefined,
+      dispose() {
+        provider?.dispose();
+        restoreEditor?.();
+      },
+    };
 
-    ctx.ui.addAutocompleteProvider((current) =>
-      createFzfFileAutocompleteProvider(current, index, () => {
+    ctx.ui.addAutocompleteProvider((current) => {
+      provider?.dispose();
+      provider = createFzfFileAutocompleteProvider(current, index, () => {
         const active = runtime;
         if (!active || active.index !== index || active.cwd !== ctx.cwd) return;
-        if (active.index.getStats().indexing) return;
+        return rebuild(ctx, "at");
+      });
+      return provider;
+    });
 
-        void rebuild(ctx, "at");
-      })
-    );
+    if (ctx.mode === "tui") {
+      const previousFactory = ctx.ui.getEditorComponent();
+      const cleanups = new Set<() => void>();
+      let warned = false;
+      let editorActive = true;
+      const factory: NonNullable<typeof previousFactory> = (tui, theme, keybindings) => {
+        const editor = previousFactory?.(tui, theme, keybindings) ?? new CustomEditor(tui, theme, keybindings);
+        if (!editorActive) return editor;
+        const cleanup = attachFzfEditor(editor, () => provider);
+        if (cleanup) cleanups.add(cleanup);
+        else if (!warned) {
+          warned = true;
+          ctx.ui.notify("fzf-files: this editor does not support automatic refresh; use Tab to refresh file suggestions", "warning");
+        }
+        return editor;
+      };
+      restoreEditor = () => {
+        editorActive = false;
+        for (const cleanup of cleanups) cleanup();
+        cleanups.clear();
+        if (ctx.ui.getEditorComponent() === factory) ctx.ui.setEditorComponent(previousFactory);
+      };
+      ctx.ui.setEditorComponent(factory);
+    }
     void rebuild(ctx, "startup");
   });
 
@@ -137,6 +174,7 @@ export default function fzfFilesExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     const active = runtime;
     runtime = undefined;
+    active?.dispose();
     active?.index.abort();
     await active?.frecency.flush();
   });
